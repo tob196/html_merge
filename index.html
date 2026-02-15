@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PDF Merger & Text Extractor</title>
+
+    <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <h2>PDF Merger & Text Extractor</h2>
+    <p>
+      Drag and drop your PDF files below. They will be processed in the order
+      they appear.
+    </p>
+
+    <div id="drop-zone">
+      <p><strong>Drag & Drop PDFs here</strong></p>
+      <p>or click to select files</p>
+      <input
+        type="file"
+        id="file-input"
+        multiple
+        accept="application/pdf"
+        style="display: none"
+      />
+    </div>
+
+    <ul id="file-list"></ul>
+
+    <div class="controls">
+      <button id="btn-merge-pdf" class="btn-primary" disabled>
+        Merge & Export PDF
+      </button>
+      <button id="btn-merge-txt" class="btn-secondary" disabled>
+        Merge & Export TXT
+      </button>
+      <button id="btn-clear" class="btn-danger" disabled>Clear All</button>
+    </div>
+
+    <div id="status"></div>
+
+    <script>
+      // Set up pdf.js worker
+      const pdfjsLib = window["pdfjs-dist/build/pdf"];
+      pdfjsLib.GlobalWorkerOptions.workerSrc =
+        "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+      // State
+      let selectedFiles = [];
+
+      // DOM Elements
+      const dropZone = document.getElementById("drop-zone");
+      const fileInput = document.getElementById("file-input");
+      const fileList = document.getElementById("file-list");
+      const btnMergePdf = document.getElementById("btn-merge-pdf");
+      const btnMergeTxt = document.getElementById("btn-merge-txt");
+      const btnClear = document.getElementById("btn-clear");
+      const statusDiv = document.getElementById("status");
+
+      // --- Event Listeners for Drag and Drop ---
+      dropZone.addEventListener("click", () => fileInput.click());
+
+      dropZone.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        dropZone.classList.add("dragover");
+      });
+
+      dropZone.addEventListener("dragleave", () => {
+        dropZone.classList.remove("dragover");
+      });
+
+      dropZone.addEventListener("drop", (e) => {
+        e.preventDefault();
+        dropZone.classList.remove("dragover");
+        handleFiles(e.dataTransfer.files);
+      });
+
+      fileInput.addEventListener("change", (e) => {
+        handleFiles(e.target.files);
+      });
+
+      btnClear.addEventListener("click", clearFiles);
+      btnMergePdf.addEventListener("click", mergeAndDownloadPDF);
+      btnMergeTxt.addEventListener("click", extractAndDownloadTXT);
+
+      // --- Core Logic ---
+
+      function handleFiles(files) {
+        const newFiles = Array.from(files).filter(
+          (file) => file.type === "application/pdf"
+        );
+        if (newFiles.length === 0) {
+          alert("Please drop valid PDF files only.");
+          return;
+        }
+        selectedFiles = [...selectedFiles, ...newFiles];
+        updateUI();
+      }
+
+      function updateUI() {
+        fileList.innerHTML = "";
+        selectedFiles.forEach((file, index) => {
+          const li = document.createElement("li");
+          li.textContent = `${index + 1}. ${file.name} (${(
+            file.size /
+            1024 /
+            1024
+          ).toFixed(2)} MB)`;
+          fileList.appendChild(li);
+        });
+
+        const hasFiles = selectedFiles.length > 0;
+        btnMergePdf.disabled = !hasFiles;
+        btnMergeTxt.disabled = !hasFiles;
+        btnClear.disabled = !hasFiles;
+        statusDiv.textContent = "";
+      }
+
+      function clearFiles() {
+        selectedFiles = [];
+        fileInput.value = "";
+        updateUI();
+      }
+
+      // Feature 1: Merge into a single PDF
+      async function mergeAndDownloadPDF() {
+        try {
+          statusDiv.textContent = "Merging PDFs... Please wait.";
+          toggleButtons(true);
+
+          const { PDFDocument } = PDFLib;
+          const mergedPdf = await PDFDocument.create();
+
+          for (const file of selectedFiles) {
+            const arrayBuffer = await file.arrayBuffer();
+            const pdf = await PDFDocument.load(arrayBuffer);
+            const copiedPages = await mergedPdf.copyPages(
+              pdf,
+              pdf.getPageIndices()
+            );
+            copiedPages.forEach((page) => mergedPdf.addPage(page));
+          }
+
+          const mergedPdfBytes = await mergedPdf.save();
+          downloadFile(
+            mergedPdfBytes,
+            "merged_document.pdf",
+            "application/pdf"
+          );
+
+          statusDiv.textContent = "PDF merged and downloaded successfully!";
+        } catch (error) {
+          console.error(error);
+          statusDiv.textContent =
+            "Error merging PDFs. See console for details.";
+        } finally {
+          toggleButtons(false);
+        }
+      }
+
+      // Feature 2: Extract text and merge into a single TXT
+      async function extractAndDownloadTXT() {
+        try {
+          statusDiv.textContent =
+            "Extracting text... This might take a moment for large files.";
+          toggleButtons(true);
+
+          let fullText = "";
+
+          for (let i = 0; i < selectedFiles.length; i++) {
+            const file = selectedFiles[i];
+            fullText += `--- Start of ${file.name} ---\n\n`;
+
+            const arrayBuffer = await file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument({ data: arrayBuffer })
+              .promise;
+
+            for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+              const page = await pdf.getPage(pageNum);
+              const textContent = await page.getTextContent();
+
+              // Combine text items, separating with a space
+              const pageText = textContent.items
+                .map((item) => item.str)
+                .join(" ");
+              fullText += pageText + "\n\n";
+            }
+            fullText += `\n--- End of ${file.name} ---\n\n\n`;
+          }
+
+          downloadFile(
+            new TextEncoder().encode(fullText),
+            "merged_text.txt",
+            "text/plain"
+          );
+
+          statusDiv.textContent = "Text extracted and downloaded successfully!";
+        } catch (error) {
+          console.error(error);
+          statusDiv.textContent =
+            "Error extracting text. See console for details.";
+        } finally {
+          toggleButtons(false);
+        }
+      }
+
+      // --- Utility Functions ---
+
+      function downloadFile(dataBytes, filename, mimeType) {
+        const blob = new Blob([dataBytes], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
+
+      function toggleButtons(disabled) {
+        btnMergePdf.disabled = disabled;
+        btnMergeTxt.disabled = disabled;
+        btnClear.disabled = disabled;
+      }
+    </script>
+  </body>
+</html>
